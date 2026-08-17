@@ -6,7 +6,7 @@ Interactive CLI that authenticates against a Catalyst Center appliance
 and lets you run a menu of common read-only API calls: health checks,
 device inventory, site health, client health, issues, compliance, etc.
 
-Author: Tarmizi
+Author: mizitheji
 License: MIT
 """
 
