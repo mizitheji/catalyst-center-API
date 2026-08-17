@@ -80,4 +80,4 @@ Then pick a number from the menu to run that API call.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
