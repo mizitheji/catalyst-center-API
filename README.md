@@ -32,8 +32,8 @@ a menu of read-only API calls.
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/catalyst-center-menu.git
-cd catalyst-center-menu
+git clone https://github.com/mizitheji/catalyst-center-API.git
+cd catalyst-center-API
 pip install -r requirements.txt
 ```
 
