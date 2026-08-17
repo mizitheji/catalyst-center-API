@@ -36,6 +36,9 @@ a menu of read-only API calls.
 ```bash
 git clone https://github.com/mizitheji/catalyst-center-API.git
 cd catalyst-center-API
+
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
