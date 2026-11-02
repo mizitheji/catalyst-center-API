@@ -24,6 +24,31 @@ from colorama import Fore, Style, init as colorama_init
 colorama_init(autoreset=True)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+
+# --------------------------------------------------------------------------- #
+# .env loader (no external dependency)
+# --------------------------------------------------------------------------- #
+def load_dotenv(path=".env"):
+    """Parse a .env file and populate os.environ for any key not already set.
+
+    Supports:
+      KEY=value
+      KEY="quoted value"
+      # comment lines
+    """
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)  # don't override real env vars
+
 TIMEOUT = 15
 
 
@@ -197,20 +222,29 @@ def show_device_inventory(dnac):
 
 def show_site_health(dnac):
     print(Fore.CYAN + "\n=== Site Health ===")
-    sites = dnac.get_all_pages("/dna/intent/api/v1/site-health")
+    sites = dnac.get_all_pages("/dna/intent/api/v1/site-health", page_size=25)
     if not sites:
         print(Fore.YELLOW + "No site health data returned.")
         return
     rows = []
     for s in sites:
+        total      = s.get("numberOfNetworkDevice", 0) or 0
+        health_pct = s.get("healthyNetworkDevicePercentage") or 0
+        good       = round(total * health_pct / 100) if total else 0
+        poor       = total - good
         rows.append([
             s.get("siteName", "-"),
             s.get("siteType", "-"),
+            total,
+            good,
+            poor,
             s.get("networkHealthAverage", "-"),
             s.get("clientHealthWired", "-"),
             s.get("clientHealthWireless", "-"),
         ])
-    display_table(rows, ["Site", "Type", "Network Health", "Wired Client Health", "Wireless Client Health"])
+
+    print(Fore.CYAN + "\nNote: 'Good'/'Poor' = device health score, NOT reachability. See Device Inventory for reachability.")
+    display_table(rows, ["Site", "Type", "Total", "Good Health", "Poor Health", "Net Health %", "Wired Health %", "Wireless Health %"])
 
 
 def show_client_health(dnac):
@@ -375,9 +409,26 @@ def print_menu(items):
 
 def main():
     print_banner()
-    host = input("Catalyst Center IP/hostname: ").strip()
-    username = input("Username: ").strip()
-    password = getpass.getpass("Password: ")
+    load_dotenv()
+
+    host     = os.environ.get("DNAC_HOST", "").strip()
+    username = os.environ.get("DNAC_USERNAME", "").strip()
+    password = os.environ.get("DNAC_PASSWORD", "").strip()
+
+    if host:
+        print(Fore.GREEN + f"Host loaded from .env: {host}")
+    else:
+        host = input("Catalyst Center IP/hostname: ").strip()
+
+    if username:
+        print(Fore.GREEN + f"Username loaded from .env: {username}")
+    else:
+        username = input("Username: ").strip()
+
+    if password:
+        print(Fore.GREEN + "Password loaded from .env.")
+    else:
+        password = getpass.getpass("Password: ")
 
     dnac = CatalystCenter(host, username, password)
     print(Fore.CYAN + f"\nAuthenticating to {host} ...")
