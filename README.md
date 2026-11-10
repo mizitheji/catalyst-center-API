@@ -20,8 +20,8 @@ a `.env` file), and pick from a menu of read-only API calls.
   - ⚠️ Active issues (configurable look-back window)
   - ✅ Compliance status (one bulk call, non-compliant first)
   - 💿 Software images (golden-image flag)
-  - 🗺️ Physical topology summary
   - 🔧 Custom raw GET call
+- 🗺️ **Site network diagram**: pick/filter a site, get an interactive HTML diagram (pan, zoom, search, click-to-highlight)
 - 🔍 Filter, column-filter, exclude and sort any results table; export it to CSV
 - ⚡ Headless mode: `--run devices compliance` writes CSV/JSON for cron or pipelines
 - 📄 Auto-pagination with a loop guard; large inventories are fetched in parallel
@@ -90,7 +90,7 @@ Select an API call to run:
   5. Open Issues
   6. Compliance Status
   7. Software Images
-  8. Physical Topology Summary
+  8. Site Network Diagram
   9. Custom raw GET call
   0. Exit
   (type '/keyword' to search the menu, e.g. /health, /issue)
@@ -109,7 +109,7 @@ python3 dnac_menu.py --host 10.0.0.5:443 --ca-bundle corp-ca.pem
 
 | Option | Meaning |
 |---|---|
-| `--run REPORT [...]` | Run reports without the menu and export them (`health devices sites clients issues compliance images topology all`) |
+| `--run REPORT [...]` | Run reports without the menu and export them (`health devices sites clients issues compliance images all`) |
 | `--format csv\|json` | Export format for `--run` (CSV is UTF-8 with BOM so Excel opens it cleanly) |
 | `--out-dir DIR` | Where exports go (default `exports/`) |
 | `--verify` / `--ca-bundle FILE` | Verify the TLS certificate (default is off) |
@@ -118,6 +118,40 @@ python3 dnac_menu.py --host 10.0.0.5:443 --ca-bundle corp-ca.pem
 The password is deliberately **not** a flag (it would show up in `ps`); use `DNAC_PASSWORD`
 or the prompt. In headless mode with missing credentials the tool exits instead of prompting.
 Exit code is `1` if any report failed, so it works in cron and CI.
+
+### 🗺️ Site Network Diagram (Option 8)
+
+Pick a site, get a diagram of just that site.
+
+1. **Pick the site** — the list shows full hierarchy paths (`Global/Malaysia/KL/HQ`). Type words to
+   narrow it (all words must match), then a number to choose.
+2. **Options** — include child sites (asked only if the site has any), draw access points
+   individually or collapse them into `+N APs` badges (default; keeps big sites readable), and an
+   optional device filter (name, IP, role or model).
+3. **Output** — a single self-contained HTML file in `exports/` (no internet or CDN needed, so it
+   works on a jump host). It opens in your browser when possible, and a filterable device table
+   for the same selection is shown in the terminal (same `x` export / `sort` commands).
+
+In the diagram: devices are laid out in tiers (core/edge, distribution/WLC, access, wireless/other).
+Green/red/grey outline = reachable/unreachable/unknown. A dashed box is a neighbour in *another* site
+(so uplinks stay visible). Parallel links are merged into one line with `x2`, `x4`...; amber means some
+members are down, dashed red means all are down. Hover for ports, model and software version;
+**scroll to zoom, drag to pan, click a device to highlight its links, type in the search box to dim
+everything else**. It follows your OS light/dark setting.
+
+Headless:
+
+```bash
+python3 dnac_menu.py --diagram "KL/HQ"                         # unique substring or full path
+python3 dnac_menu.py --diagram Global/Malaysia/KL --aps --device-filter access
+python3 dnac_menu.py --diagram Global/Malaysia/KL --no-children --out-dir /var/www/diagrams
+```
+
+`examples/sample_site_diagram_MOCK_DATA.html` shows the output (generated from fake data).
+
+**How it works:** site list (`/site`) → devices per site (`/membership/{siteId}`, in parallel) →
+global physical topology (cached) filtered to those devices → layered layout → SVG. All device
+text is HTML-escaped and the page ships with a strict Content-Security-Policy.
 
 ### 🖥️ Device Inventory (Option 2)
 
