@@ -10,19 +10,21 @@ a `.env` file), and pick from a menu of read-only API calls.
 ## ✨ Features
 
 - 🔑 Loads credentials from `.env` automatically — with interactive fallback if not set
-- 🔄 Authenticates via `/dna/system/api/v1/auth/token` and auto re-authenticates if the token expires
+- 🔄 One pooled HTTPS session, proactive token refresh (before the ~60 min expiry) and re-auth on 401
+- 🔁 Automatic retry with backoff on rate limits (429) and transient 5xx errors
 - 📋 Menu-driven access to:
-  - 💚 Overall network health
-  - 🖥️ Device inventory
-  - 🏢 Site health (total devices, good/poor health counts, network & client health %)
-  - 📱 Client health
-  - ⚠️ Open issues
-  - ✅ Compliance status
-  - 💿 Software images
+  - 💚 Overall network health (per-category breakdown)
+  - 🖥️ Device inventory (model/PID with stack dedup, reachability summary)
+  - 🏢 Site health
+  - 📱 Client health (site names resolved)
+  - ⚠️ Active issues (configurable look-back window)
+  - ✅ Compliance status (one bulk call, non-compliant first)
+  - 💿 Software images (golden-image flag)
   - 🗺️ Physical topology summary
-  - 🔧 Custom raw GET call (any endpoint path, for anything not covered above)
-- 🔍 Search the menu itself, or filter/search within any results table
-- 📄 Auto-pagination for endpoints that return 500+ records — nothing gets silently cut off
+  - 🔧 Custom raw GET call
+- 🔍 Filter, column-filter, exclude and sort any results table; export it to CSV
+- ⚡ Headless mode: `--run devices compliance` writes CSV/JSON for cron or pipelines
+- 📄 Auto-pagination with a loop guard; large inventories are fetched in parallel
 - 🎨 Pretty table output via `tabulate`, colored terminal output via `colorama`
 
 ## 📦 Requirements
@@ -96,6 +98,27 @@ Select an API call to run:
 Choice:
 ```
 
+### ⌨️ Command-line options
+
+```bash
+python3 dnac_menu.py --list                        # list report names
+python3 dnac_menu.py --run devices sites           # headless: export to ./exports/*.csv
+python3 dnac_menu.py --run all --format json --out-dir /var/reports
+python3 dnac_menu.py --host 10.0.0.5:443 --ca-bundle corp-ca.pem
+```
+
+| Option | Meaning |
+|---|---|
+| `--run REPORT [...]` | Run reports without the menu and export them (`health devices sites clients issues compliance images topology all`) |
+| `--format csv\|json` | Export format for `--run` (CSV is UTF-8 with BOM so Excel opens it cleanly) |
+| `--out-dir DIR` | Where exports go (default `exports/`) |
+| `--verify` / `--ca-bundle FILE` | Verify the TLS certificate (default is off) |
+| `--host` / `--user` | Override `DNAC_HOST` / `DNAC_USERNAME` |
+
+The password is deliberately **not** a flag (it would show up in `ps`); use `DNAC_PASSWORD`
+or the prompt. In headless mode with missing credentials the tool exits instead of prompting.
+Exit code is `1` if any report failed, so it works in cron and CI.
+
 ### 🖥️ Device Inventory (Option 2)
 
 ```
@@ -166,6 +189,11 @@ Search/filter (Enter to go back to menu, 'c' to clear filter): johor
 | `10.20.1` | Devices on that IP subnet |
 | `Unreachable` | Only unreachable devices (Device Inventory) |
 | `17.9.4` | Devices running that software version |
+| `reach:unreach` | Match only within one column (column name prefix, then `:`) |
+| `!17.9` | Exclude rows containing the term |
+| `sort hostname` / `sort serial desc` | Sort by a column (numeric-aware) |
+| `x` | Export the currently filtered/sorted rows to CSV |
+| `a` | Show all rows (only the first 100 are printed by default) |
 | `c` | Clear the current filter — show all rows again |
 | *(Enter)* | Exit the filter prompt and return to the main menu |
 
@@ -199,17 +227,20 @@ Matches:
 
 ## 📝 Notes
 
-- 🔓 TLS certificate verification is disabled by default (`verify=False`) since most
-  Catalyst Center deployments use self-signed certs. If your appliance has a
-  trusted cert, set `verify_ssl=True` when constructing `CatalystCenter`
-  in `dnac_menu.py`.
+- 🔓 TLS certificate verification is **off by default** (most Catalyst Center
+  deployments use self-signed certs) and the tool prints a warning when it is.
+  Turn it on with `DNAC_VERIFY_SSL=true`, `--verify`, or point at your CA with
+  `DNAC_CA_BUNDLE` / `--ca-bundle`.
 - ✅ This tool only issues GET requests — it does not push config or make
   any changes to your environment.
-- 📄 Catalyst Center caps most list endpoints at 500 records per call.
-  The Site Health endpoint caps at 50. Both limits are handled automatically
-  by `CatalystCenter.get_all_pages()`. If you add a new menu item for a list
-  endpoint, call `dnac.get_all_pages(path, page_size=N)` instead of
-  `dnac.get(...)` and set `page_size` to the endpoint's documented maximum.
+- 📄 Catalyst Center caps most list endpoints at 500 records per call and Site
+  Health at 50. `CatalystCenter.get_all_pages()` handles both. If an endpoint
+  ignores `offset`/`limit` and keeps returning the same page, the loop stops
+  instead of spinning forever. The device list is fetched in parallel once it
+  exceeds one page, and device/site lists are cached for a couple of minutes so
+  Inventory → Compliance doesn't re-download them.
+- 🧾 CSV exports neutralise cells starting with `= + @` (device-supplied names
+  can otherwise become Excel formulas).
 - 🗂️ The **Custom raw GET call** option prints only the first 4 000
   characters to the terminal but always saves the **full, untruncated**
   response to `raw_output/<timestamp>.json` (created automatically, git-ignored).
@@ -218,14 +249,23 @@ Matches:
 
 ## 🧩 Extending it
 
-Adding a new menu item is a copy-paste job:
+Each report is a function that **fetches and returns a `Table`** — no printing, no
+`input()` — so the same code serves the menu, the filter/export UI and headless mode.
 
-1. Write a function that takes `dnac`, calls `dnac.get(path)` or
-   `dnac.get_all_pages(path, page_size=N)` for list endpoints, and passes
-   results to `display_table(rows, headers)`.
-2. Add one line to the `MENU_ITEMS` list at the bottom of `dnac_menu.py`.
+```python
+def fetch_licenses(dnac):
+    items = dnac.get_all_pages("/dna/intent/api/v1/some/list", page_size=500)
+    if not items:
+        raise NoData("No licenses returned.")
+    rows = [[i.get("name", "-"), i.get("status", "-")] for i in items]
+    return Table(["Name", "Status"], rows, notes=[f"{len(rows)} licenses"])
 
-Token refresh, error handling, pagination, and table search all come for free.
+REPORTS.append(Report("licenses", "Licenses", fetch_licenses))
+```
+
+That's it — the menu entry, `/search`, filter/sort/export, `--run licenses` and
+error handling all come for free. Use `parallel_map(fn, items)` for N+1 style
+lookups (keep `WORKERS` low; the controller rate-limits).
 
 ## License
 
