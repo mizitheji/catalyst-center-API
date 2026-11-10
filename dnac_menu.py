@@ -787,33 +787,47 @@ def resolve_site(sites: List[dict], query: str) -> dict:
 
 
 def pick_site(sites: List[dict]) -> Optional[dict]:
-    """Type to filter (all words must match), number to choose, Enter to cancel."""
-    current = sites
+    """Choose a site. Type words to filter (all must match), a number to select,
+    n / p to page, a to show the whole list, Enter to cancel."""
+    current, page, show_all = sites, 0, False
+    size = SITE_LIST_LIMIT
     while True:
-        shown = current[:SITE_LIST_LIMIT]
-        print(Fore.CYAN + f"\nSites ({len(current)} of {len(sites)}):")
-        for i, s in enumerate(shown, 1):
-            print(f"  {Fore.YELLOW}{i:>3}{Style.RESET_ALL}. {s['path']}")
-        if len(current) > len(shown):
-            print(Fore.YELLOW + f"  ...{len(current) - len(shown)} more - type text to narrow the list")
+        pages = max(1, -(-len(current) // size))
+        page = min(page, pages - 1)
+        start = 0 if show_all else page * size
+        shown = current if show_all else current[start:start + size]
+        paged = pages > 1 and not show_all
+        print(Fore.CYAN + f"\nSites ({len(current)} of {len(sites)})"
+              + (f" - page {page + 1}/{pages}" if paged else ""))
+        for i, s in enumerate(shown, start + 1):  # numbers stay valid across pages
+            print(f"  {Fore.YELLOW}{i:>4}{Style.RESET_ALL}. {s['path']}")
+        hint = "Type text to filter, a number to select"
+        if paged:
+            hint += ", n/p = next/prev page, a = show all"
         try:
-            cmd = input(Fore.CYAN + "Type text to filter, a number to select, Enter to cancel: ").strip()
+            cmd = input(Fore.CYAN + hint + ", Enter to cancel: ").strip()
         except EOFError:
             return None
+        low = cmd.lower()
         if not cmd:
             return None
-        if cmd.isdigit():
+        if low == "n" and pages > 1:
+            page, show_all = min(page + 1, pages - 1), False
+        elif low == "p" and pages > 1:
+            page, show_all = max(page - 1, 0), False
+        elif low == "a":
+            show_all = True
+        elif cmd.isdigit():
             idx = int(cmd) - 1
-            if 0 <= idx < len(shown):
-                return shown[idx]
+            if 0 <= idx < len(current):
+                return current[idx]
             print(Fore.RED + "Number out of range.")
-            continue
-        words = cmd.lower().split()
-        result = [s for s in sites if all(w in s["path"].lower() for w in words)]
-        if result:
-            current = result
         else:
-            print(Fore.YELLOW + f"No sites match '{cmd}'.")
+            result = [s for s in sites if all(w in s["path"].lower() for w in low.split())]
+            if result:
+                current, page, show_all = result, 0, False
+            else:
+                print(Fore.YELLOW + f"No sites match '{cmd}'.")
 
 
 def site_member_ids(dnac: CatalystCenter, site_ids: List[str]) -> set:
